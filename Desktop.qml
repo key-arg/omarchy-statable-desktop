@@ -5,66 +5,119 @@ import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
 
-// The Statable desktop card: a compact glass tile pinned to the top-left of
-// the wallpaper, on the Bottom layer (above the wallpaper, below windows).
+// The Statable desktop card: a glass tile on the wallpaper (Bottom layer,
+// above the wallpaper, below windows), always visible.
 //
-// The ring around the live count is a countdown to the next refresh: it fills
-// over a minute, and when it completes the data reloads and it starts again.
-// The chart is today's traffic by the hour (solid) against the same hours
-// yesterday (dotted); hover it to read a single hour. Clicking opens the
-// dashboard. Data is the statable CLI, off the UI thread; a non-zero exit
-// leaves that part blank rather than a wrong figure.
+// It is configured from ~/.local/state/omarchy/settings/statable-desktop.json
+// (the Omarchy plugin-settings convention). All keys are optional:
+//   corner   "top-left" | "top-right" | "bottom-left" | "bottom-right"
+//   monitor  output name (e.g. "DP-1"); empty = wherever the shell puts it
+//   margin   gap from the screen edge, px
+//   site     domain or id to show; empty = the statable CLI's default site
+//
+// The site, its dashboard link and the numbers all follow the CLI's default
+// site unless `site` overrides it, so `statable sites use <domain>` moves the
+// whole card to another site. The ring is a countdown to the next refresh;
+// the chart is today by the hour against yesterday. Data is the statable CLI,
+// off the UI thread; a non-zero exit leaves that part blank.
 Item {
   id: root
 
-  property string site: "example.com"
-  property string dashUrl: "https://statable.com/share/03D3Cfb9eA"
-  readonly property int refreshMs: 60000
+  // ---- config (read from the settings file) ----
+  property string cfgCorner: "top-left"
+  property string cfgMonitor: ""
+  property int cfgMargin: 28
+  property string cfgSite: ""
+
+  FileView {
+    path: Quickshell.env("HOME") + "/.local/state/omarchy/settings/statable-desktop.json"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.applyConfig(text())
+    onLoadFailed: root.applyConfig("")
+  }
+  function applyConfig(txt) {
+    var c = {}
+    try { if (txt) c = JSON.parse(txt) } catch (e) { c = {} }
+    root.cfgCorner = c.corner || "top-left"
+    root.cfgMonitor = c.monitor || ""
+    root.cfgMargin = (c.margin === undefined || c.margin === null) ? 28 : c.margin
+    root.cfgSite = c.site || ""
+    root.fetchSite()
+  }
+
+  // ---- resolved site ----
+  property string siteName: ""                                   // domain shown
+  property string dashUrl: "https://statable.com"                // dashboard link
+  property string siteArg: ""                                    // --site value, or ""
+
+  function domainOf(u) { return String(u || "").replace(/^https?:\/\//, "").replace(/\/+$/, "") }
+  function pickSite(arr) {
+    if (!Array.isArray(arr) || arr.length === 0) return null
+    if (root.cfgSite) {
+      for (var i = 0; i < arr.length; i++)
+        if (root.domainOf(arr[i].name) === root.cfgSite || String(arr[i].site_id) === root.cfgSite) return arr[i]
+    }
+    for (var j = 0; j < arr.length; j++) if (arr[j].default) return arr[j]
+    return arr[0]
+  }
 
   property string nowCount: ""
-  property var hourly: []               // [{time, visitors, visitors_previous}]
-  property real refreshProgress: 0      // 0..1, drives the ring countdown
+  property var hourly: []
+  property real refreshProgress: 0
   property int hoverIndex: -1
 
-  // Neutral glass; blue is used only where it means Statable — the logo, the
-  // countdown ring, the glow on the live number — so the card sits calmly on
-  // any wallpaper.
   readonly property color brand: "#3f86ff"
   readonly property string fontFamily: Style.font.family
 
-  readonly property real todaySum: {
-    var s = 0; for (var i = 0; i < hourly.length; i++) s += Number(hourly[i].visitors) || 0; return s
-  }
-  readonly property real yestSum: {
-    var s = 0; for (var i = 0; i < hourly.length; i++) s += Number(hourly[i].visitors_previous) || 0; return s
-  }
+  readonly property real todaySum: { var s = 0; for (var i = 0; i < hourly.length; i++) s += Number(hourly[i].visitors) || 0; return s }
+  readonly property real yestSum: { var s = 0; for (var i = 0; i < hourly.length; i++) s += Number(hourly[i].visitors_previous) || 0; return s }
 
+  readonly property int refreshMs: 60000
+
+  function withSite(base) { return root.siteArg === "" ? base : base.concat(["--site", root.siteArg]) }
+  function fetchSite() { if (!sitesP.running) sitesP.running = true }
   function poll() {
     if (!nowP.running) nowP.running = true
     if (!serP.running) serP.running = true
   }
-  Component.onCompleted: { poll(); ringAnim.restart() }
+  Component.onCompleted: { fetchSite(); poll(); ringAnim.restart() }
 
   Timer {
     interval: root.refreshMs; running: true; repeat: true
     onTriggered: { root.poll(); ringAnim.restart() }
   }
-  NumberAnimation {
-    id: ringAnim; target: root; property: "refreshProgress"
-    from: 0; to: 1; duration: root.refreshMs; running: true
-  }
+  NumberAnimation { id: ringAnim; target: root; property: "refreshProgress"; from: 0; to: 1; duration: root.refreshMs; running: true }
   onRefreshProgressChanged: ring.requestPaint()
   onNowCountChanged: ring.requestPaint()
+  onHourlyChanged: chart.requestPaint()
+  onHoverIndexChanged: chart.requestPaint()
 
   Process {
+    id: sitesP
+    command: ["statable", "sites", "--format", "json"]
+    stdout: StdioCollector { id: sitesO; waitForEnd: true }
+    onExited: function (c) {
+      var s = null
+      try { if (c === 0) s = root.pickSite(JSON.parse(sitesO.text)) } catch (e) { s = null }
+      if (s) {
+        root.siteName = root.domainOf(s.name)
+        root.dashUrl = s.hash ? ("https://statable.com/share/" + s.hash) : "https://statable.com"
+        root.siteArg = root.cfgSite ? String(s.site_id) : ""
+      }
+      root.poll()
+    }
+  }
+  Process {
     id: nowP
-    command: ["statable", "now"]
+    command: root.withSite(["statable", "now"])
     stdout: StdioCollector { id: nowO; waitForEnd: true }
     onExited: function (c) { root.nowCount = c === 0 ? String(nowO.text || "").trim() : "" }
   }
   Process {
     id: serP
-    command: ["statable", "series", "--by", "hour", "--range", "1d", "--compare", "previous_period", "--format", "json"]
+    command: root.withSite(["statable", "series", "--by", "hour", "--range", "1d", "--compare", "previous_period", "--format", "json"])
     stdout: StdioCollector { id: serO; waitForEnd: true }
     onExited: function (c) {
       try { var a = c === 0 ? JSON.parse(serO.text) : []; root.hourly = Array.isArray(a) ? a : [] }
@@ -74,7 +127,6 @@ Item {
   Process { id: opener; command: ["xdg-open", root.dashUrl] }
 
   function fmtInt(n) { return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, " ") }
-  // Fit the live number to the ring: fewer digits, bigger.
   function nowSize() {
     var L = root.nowCount.length
     if (L <= 1) return Style.space(25)
@@ -85,19 +137,33 @@ Item {
   }
   function hourLabel(t) { var s = String(t || ""); var p = s.split(" "); return p.length > 1 ? p[1] : s }
 
-  onHourlyChanged: chart.requestPaint()
-  onHoverIndexChanged: chart.requestPaint()
+  function screenFor(name) {
+    if (!name) return null
+    var ss = Quickshell.screens
+    for (var i = 0; i < ss.length; i++) if (ss[i].name === name) return ss[i]
+    return null
+  }
+  readonly property bool anchorTop: root.cfgCorner.indexOf("bottom") < 0
+  readonly property bool anchorLeft: root.cfgCorner.indexOf("right") < 0
 
   PanelWindow {
     id: win
     visible: true
     color: "transparent"
+    screen: root.screenFor(root.cfgMonitor)
     WlrLayershell.namespace: "omarchy-statable-desktop"
     WlrLayershell.layer: WlrLayer.Bottom
     exclusiveZone: 0
-    anchors { top: true; left: true }
-    margins.top: Style.space(28)
-    margins.left: Style.space(28)
+    anchors {
+      top: root.anchorTop
+      bottom: !root.anchorTop
+      left: root.anchorLeft
+      right: !root.anchorLeft
+    }
+    margins.top: root.anchorTop ? Style.space(root.cfgMargin) : 0
+    margins.bottom: root.anchorTop ? 0 : Style.space(root.cfgMargin)
+    margins.left: root.anchorLeft ? Style.space(root.cfgMargin) : 0
+    margins.right: root.anchorLeft ? 0 : Style.space(root.cfgMargin)
     implicitWidth: card.width
     implicitHeight: card.height
 
@@ -121,17 +187,18 @@ Item {
         anchors { left: parent.left; right: parent.right; top: parent.top; margins: Style.space(14) }
         spacing: Style.space(11)
 
-        // header: site + real logo (I1)
         Item {
           width: parent.width
           height: Style.space(20)
           Text {
             anchors.verticalCenter: parent.verticalCenter
             anchors.left: parent.left
-            text: root.site
+            text: root.siteName || root.cfgSite || "…"
             color: Qt.rgba(1, 1, 1, 0.6)
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
+            elide: Text.ElideRight
+            width: parent.width - Style.space(26)
           }
           Image {
             anchors.verticalCenter: parent.verticalCenter
@@ -143,7 +210,6 @@ Item {
           }
         }
 
-        // ring countdown + auto-fit, glowing number
         Row {
           spacing: Style.space(11)
           Canvas {
@@ -158,19 +224,16 @@ Item {
               ctx.beginPath(); ctx.arc(cx, cy, r, a0, a0 + root.refreshProgress * Math.PI * 2)
               ctx.strokeStyle = root.brand; ctx.lineWidth = 3; ctx.lineCap = "round"; ctx.stroke()
 
-              // the live number, drawn here so it can carry a glow
               var txt = root.nowCount === "" ? "—" : root.nowCount
               var small = txt.length <= 1
               ctx.textAlign = "center"; ctx.textBaseline = "middle"
-              var ny = cy + root.nowSize() * 0.16  // nudge onto the true optical centre
+              var ny = cy + root.nowSize() * 0.16
               ctx.font = (small ? "800 " : "700 ") + root.nowSize() + "px " + root.fontFamily
-              // glow pass — brighter and wider for a single digit
               ctx.shadowColor = small ? "rgba(80,150,255,0.95)" : "rgba(255,255,255,0.35)"
               ctx.shadowBlur = small ? 14 : 6
               ctx.fillStyle = "#ffffff"
               ctx.fillText(txt, cx, ny)
               ctx.fillText(txt, cx, ny)
-              // crisp pass on top
               ctx.shadowBlur = 0
               ctx.fillText(txt, cx, ny)
             }
@@ -178,26 +241,14 @@ Item {
           Column {
             anchors.verticalCenter: parent.verticalCenter
             spacing: Style.space(1)
-            Text {
-              text: "active now"
-              color: "#ffffff"
-              font.family: Style.font.family
-              font.pixelSize: Style.font.body
-            }
-            Text {
-              text: "refreshes each minute"
-              color: Qt.rgba(1, 1, 1, 0.42)
-              font.family: Style.font.family
-              font.pixelSize: Style.font.caption
-            }
+            Text { text: "active now"; color: "#ffffff"; font.family: Style.font.family; font.pixelSize: Style.font.body }
+            Text { text: "refreshes each minute"; color: Qt.rgba(1, 1, 1, 0.42); font.family: Style.font.family; font.pixelSize: Style.font.caption }
           }
         }
 
-        // chart: today hourly (solid) vs yesterday (dotted), hover to read an hour
         Item {
           width: parent.width
           height: Style.space(46)
-
           Canvas {
             id: chart
             anchors.fill: parent
@@ -212,15 +263,10 @@ Item {
               var maxv = 1
               for (var i = 0; i < n; i++) maxv = Math.max(maxv, Number(data[i].visitors) || 0, Number(data[i].visitors_previous) || 0)
 
-              // yesterday: dotted
               ctx.beginPath()
-              for (var j = 0; j < n; j++) {
-                var yp = yAt(Number(data[j].visitors_previous) || 0, maxv)
-                if (j === 0) ctx.moveTo(xAt(j, n), yp); else ctx.lineTo(xAt(j, n), yp)
-              }
+              for (var j = 0; j < n; j++) { var yp = yAt(Number(data[j].visitors_previous) || 0, maxv); if (j === 0) ctx.moveTo(xAt(j, n), yp); else ctx.lineTo(xAt(j, n), yp) }
               ctx.setLineDash([2, 3]); ctx.strokeStyle = "rgba(255,255,255,0.42)"; ctx.lineWidth = 1.3; ctx.stroke(); ctx.setLineDash([])
 
-              // today: area + solid white line
               ctx.beginPath(); ctx.moveTo(xAt(0, n), yAt(Number(data[0].visitors) || 0, maxv))
               for (var k = 1; k < n; k++) ctx.lineTo(xAt(k, n), yAt(Number(data[k].visitors) || 0, maxv))
               var g = ctx.createLinearGradient(0, 0, 0, height)
@@ -231,18 +277,15 @@ Item {
               for (var m = 1; m < n; m++) ctx.lineTo(xAt(m, n), yAt(Number(data[m].visitors) || 0, maxv))
               ctx.strokeStyle = "rgba(255,255,255,0.92)"; ctx.lineWidth = 1.6; ctx.lineJoin = "round"; ctx.stroke()
 
-              // hover guide + point (only while hovering; no stray dot otherwise)
               var hi = root.hoverIndex
               if (hi >= 0 && hi < n) {
                 var hx = xAt(hi, n)
-                ctx.beginPath(); ctx.moveTo(hx, 0); ctx.lineTo(hx, height)
-                ctx.strokeStyle = "rgba(255,255,255,0.25)"; ctx.lineWidth = 1; ctx.stroke()
+                ctx.beginPath(); ctx.moveTo(hx, 0); ctx.lineTo(hx, height); ctx.strokeStyle = "rgba(255,255,255,0.25)"; ctx.lineWidth = 1; ctx.stroke()
                 var ty = yAt(Number(data[hi].visitors) || 0, maxv)
                 ctx.beginPath(); ctx.arc(hx, ty, 3, 0, Math.PI * 2); ctx.fillStyle = "#ffffff"; ctx.fill()
               }
             }
           }
-
           MouseArea {
             anchors.fill: parent
             hoverEnabled: true
@@ -250,14 +293,11 @@ Item {
             onPositionChanged: function (m) {
               var n = root.hourly.length
               if (n < 2) { root.hoverIndex = -1; return }
-              var idx = Math.round(m.x / width * (n - 1))
-              root.hoverIndex = Math.max(0, Math.min(n - 1, idx))
+              root.hoverIndex = Math.max(0, Math.min(n - 1, Math.round(m.x / width * (n - 1))))
             }
             onExited: root.hoverIndex = -1
             onClicked: opener.running = true
           }
-
-          // hover tooltip — dark glass, not pure black
           Rectangle {
             visible: root.hoverIndex >= 0 && root.hoverIndex < root.hourly.length
             radius: Style.space(7)
@@ -276,23 +316,13 @@ Item {
               id: tip
               anchors.centerIn: parent
               spacing: Style.space(1)
-              Text {
-                text: root.hoverIndex >= 0 ? root.hourLabel(root.hourly[root.hoverIndex].time) : ""
-                color: "#fff"; font.family: Style.font.family; font.pixelSize: Style.font.caption; font.bold: true
-              }
-              Text {
-                text: root.hoverIndex >= 0 ? ("today " + root.fmtInt(root.hourly[root.hoverIndex].visitors || 0)) : ""
-                color: Qt.rgba(1, 1, 1, 0.85); font.family: Style.font.family; font.pixelSize: Style.font.caption
-              }
-              Text {
-                text: root.hoverIndex >= 0 ? ("yesterday " + root.fmtInt(root.hourly[root.hoverIndex].visitors_previous || 0)) : ""
-                color: Qt.rgba(1, 1, 1, 0.55); font.family: Style.font.family; font.pixelSize: Style.font.caption
-              }
+              Text { text: root.hoverIndex >= 0 ? root.hourLabel(root.hourly[root.hoverIndex].time) : ""; color: "#fff"; font.family: Style.font.family; font.pixelSize: Style.font.caption; font.bold: true }
+              Text { text: root.hoverIndex >= 0 ? ("today " + root.fmtInt(root.hourly[root.hoverIndex].visitors || 0)) : ""; color: Qt.rgba(1, 1, 1, 0.85); font.family: Style.font.family; font.pixelSize: Style.font.caption }
+              Text { text: root.hoverIndex >= 0 ? ("yesterday " + root.fmtInt(root.hourly[root.hoverIndex].visitors_previous || 0)) : ""; color: Qt.rgba(1, 1, 1, 0.55); font.family: Style.font.family; font.pixelSize: Style.font.caption }
             }
           }
         }
 
-        // footer: both real totals, each with a wavy marker matching its line
         Item {
           width: parent.width
           height: Style.space(14)
@@ -303,11 +333,7 @@ Item {
             Canvas {
               anchors.verticalCenter: parent.verticalCenter
               width: Style.space(16); height: Style.space(9)
-              onPaint: {
-                var ctx = getContext("2d"); ctx.reset()
-                ctx.beginPath(); ctx.moveTo(0, 7); ctx.lineTo(width * 0.33, 2); ctx.lineTo(width * 0.66, 7); ctx.lineTo(width, 2)
-                ctx.strokeStyle = "rgba(255,255,255,0.92)"; ctx.lineWidth = 1.5; ctx.lineJoin = "round"; ctx.stroke()
-              }
+              onPaint: { var ctx = getContext("2d"); ctx.reset(); ctx.beginPath(); ctx.moveTo(0, 7); ctx.lineTo(width * 0.33, 2); ctx.lineTo(width * 0.66, 7); ctx.lineTo(width, 2); ctx.strokeStyle = "rgba(255,255,255,0.92)"; ctx.lineWidth = 1.5; ctx.lineJoin = "round"; ctx.stroke() }
             }
             Text { text: "today " + root.fmtInt(root.todaySum); color: Qt.rgba(1, 1, 1, 0.72); font.family: Style.font.family; font.pixelSize: Style.font.caption }
           }
@@ -318,12 +344,7 @@ Item {
             Canvas {
               anchors.verticalCenter: parent.verticalCenter
               width: Style.space(16); height: Style.space(9)
-              onPaint: {
-                var ctx = getContext("2d"); ctx.reset()
-                ctx.setLineDash([2, 2])
-                ctx.beginPath(); ctx.moveTo(0, 7); ctx.lineTo(width * 0.33, 2); ctx.lineTo(width * 0.66, 7); ctx.lineTo(width, 2)
-                ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 1.5; ctx.lineJoin = "round"; ctx.stroke()
-              }
+              onPaint: { var ctx = getContext("2d"); ctx.reset(); ctx.setLineDash([2, 2]); ctx.beginPath(); ctx.moveTo(0, 7); ctx.lineTo(width * 0.33, 2); ctx.lineTo(width * 0.66, 7); ctx.lineTo(width, 2); ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 1.5; ctx.lineJoin = "round"; ctx.stroke() }
             }
             Text { text: "yesterday " + root.fmtInt(root.yestSum); color: Qt.rgba(1, 1, 1, 0.5); font.family: Style.font.family; font.pixelSize: Style.font.caption }
           }

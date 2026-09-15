@@ -31,6 +31,29 @@ id to the `plugins` array of `~/.config/omarchy/shell.json`:
 
 The shell mounts it at startup (`keepLoaded`), pinned to the top-left corner.
 
+## Moving it, and choosing the site
+
+The card reads `~/.local/state/omarchy/settings/statable-desktop.json` (the
+Omarchy plugin-settings location). Every key is optional:
+
+```jsonc
+{
+  "corner":  "top-left",   // top-left | top-right | bottom-left | bottom-right
+  "monitor": "",           // output name (e.g. "DP-1"); empty = wherever the shell puts it
+  "margin":  28,           // gap from the screen edge, px
+  "site":    ""            // domain or id to show; empty = the CLI's default site
+}
+```
+
+A **position** change (`corner`, `monitor`, `margin`) applies on the next shell
+reload — `omarchy-restart-shell`, or log out and in. Layer-shell surfaces are
+anchored when they are created, so the card is placed on restart, not on save.
+
+The **site** needs no setting: the card shows the Statable CLI's default site,
+so `statable sites use example.com` moves the whole card — its name, its
+seven-day numbers, and the dashboard it opens on click — to that site. Set
+`site` only to pin the card to a site other than the CLI default.
+
 ## Behaviour
 
 The card fills in only from clean `statable` runs. No key, no default site, the
