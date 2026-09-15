@@ -73,6 +73,14 @@ and the card refreshes once a minute.
 The bar widget [`omarchy-statable`](https://github.com/key-arg/omarchy-statable)
 is a separate plugin — a live pill with a click-through panel. Run either, or both.
 
+## Remove
+
+```bash
+omarchy plugin remove com.statable.desktop
+```
+
+That deletes the plugin's folder under `~/.config/omarchy/plugins/` and its entry in `shell.json`. Nothing else is touched.
+
 ## Licence
 
 MIT. Unsandboxed QML that runs inside `omarchy-shell`, like every Omarchy
