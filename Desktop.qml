@@ -125,11 +125,17 @@ Item {
     }
   }
   Process { id: opener; command: ["xdg-open", root.dashUrl] }
-  Process {
-    id: settingsOpener
-    property string cfgPath: Quickshell.env("HOME") + "/.local/state/omarchy/settings/statable-desktop.json"
-    command: ["sh", "-c",
-      "f='" + cfgPath + "'; mkdir -p \"$(dirname \"$f\")\"; [ -f \"$f\" ] || printf '%s\\n' '{ \"corner\": \"top-left\", \"monitor\": \"\", \"margin\": 28, \"site\": \"\" }' > \"$f\"; omarchy-launch-editor \"$f\""]
+  // Settings live on the card, not in an external editor: the machine's
+  // default editor is the only handler for the file and may be mid-setup.
+  property bool settingsOpen: false
+  property string cfgPath: Quickshell.env("HOME") + "/.local/state/omarchy/settings/statable-desktop.json"
+  Process { id: writer }
+  function saveCorner(corner) {
+    var obj = { corner: corner, monitor: root.cfgMonitor || "", margin: root.cfgMargin, site: root.cfgSite || "" }
+    // JSON and path are separate argv, so nothing needs escaping.
+    writer.command = ["sh", "-c", "mkdir -p \"$(dirname \"$2\")\"; printf '%s\\n' \"$1\" > \"$2\"",
+      "_", JSON.stringify(obj, null, 2), root.cfgPath]
+    writer.running = true
   }
 
   function fmtInt(n) { return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, " ") }
@@ -220,14 +226,14 @@ Item {
               text: "\uf013"
               font.family: Style.font.family
               font.pixelSize: Style.font.caption
-              color: Qt.rgba(1, 1, 1, gearMA.containsMouse ? 0.95 : 0.6)
-              opacity: card.cardHovered ? 1 : 0
+              color: Qt.rgba(1, 1, 1, (gearMA.containsMouse || root.settingsOpen) ? 0.95 : 0.6)
+              opacity: (card.cardHovered || root.settingsOpen) ? 1 : 0
               Behavior on opacity { NumberAnimation { duration: 120 } }
               MouseArea {
                 id: gearMA
                 anchors.fill: parent; anchors.margins: -6
                 hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                onClicked: settingsOpener.running = true
+                onClicked: root.settingsOpen = !root.settingsOpen
               }
             }
             // logo — the one click target for the site
@@ -385,6 +391,75 @@ Item {
               onPaint: { var ctx = getContext("2d"); ctx.reset(); ctx.setLineDash([2, 2]); ctx.beginPath(); ctx.moveTo(0, 7); ctx.lineTo(width * 0.33, 2); ctx.lineTo(width * 0.66, 7); ctx.lineTo(width, 2); ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 1.5; ctx.lineJoin = "round"; ctx.stroke() }
             }
             Text { text: "yesterday " + root.fmtInt(root.yestSum); color: Qt.rgba(1, 1, 1, 0.5); font.family: Style.font.family; font.pixelSize: Style.font.caption }
+          }
+        }
+      }
+
+      // ---- on-card settings ----
+      Rectangle {
+        anchors.fill: parent
+        radius: card.radius
+        visible: root.settingsOpen
+        color: Qt.rgba(0.055, 0.05, 0.075, 1.0)
+        border.color: Qt.rgba(1, 1, 1, 0.12); border.width: 1
+        MouseArea { anchors.fill: parent; hoverEnabled: true }   // swallow hover/clicks
+
+        Column {
+          anchors { left: parent.left; right: parent.right; top: parent.top; margins: Style.space(16) }
+          spacing: Style.space(12)
+
+          Row {
+            width: parent.width
+            Text { text: "Settings"; color: "#fff"; font.family: Style.font.family; font.pixelSize: Style.font.body; font.bold: true }
+            Item { width: parent.width - 2 * Style.space(50); height: 1 }
+            Text {
+              text: "\uf00d"   // close
+              color: Qt.rgba(1, 1, 1, closeMA.containsMouse ? 0.95 : 0.6)
+              font.family: Style.font.family; font.pixelSize: Style.font.body
+              MouseArea { id: closeMA; anchors.fill: parent; anchors.margins: -6; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: root.settingsOpen = false }
+            }
+          }
+
+          Text { text: "CORNER"; color: Qt.rgba(1, 1, 1, 0.45); font.family: Style.font.family; font.pixelSize: Style.font.caption }
+          Grid {
+            id: cornerGrid
+            width: parent.width
+            columns: 2; rowSpacing: Style.space(8); columnSpacing: Style.space(8)
+            readonly property real cellW: (width - Style.space(8)) / 2
+            Repeater {
+              model: [
+                { id: "top-left", g: "\uf0d8\uf0d9" },
+                { id: "top-right", g: "" },
+                { id: "bottom-left", g: "" },
+                { id: "bottom-right", g: "" }
+              ]
+              delegate: Rectangle {
+                width: cornerGrid.cellW
+                height: Style.space(34)
+                radius: Style.space(8)
+                readonly property bool active: root.cfgCorner === modelData.id
+                color: active ? Qt.rgba(0.184, 0.482, 1.0, 0.22) : Qt.rgba(1, 1, 1, cellMA.containsMouse ? 0.10 : 0.05)
+                border.color: active ? root.brand : Qt.rgba(1, 1, 1, 0.12); border.width: 1
+                Text {
+                  anchors.centerIn: parent
+                  text: modelData.id.replace("-", " ")
+                  color: active ? "#fff" : Qt.rgba(1, 1, 1, 0.7)
+                  font.family: Style.font.family; font.pixelSize: Style.font.caption
+                }
+                MouseArea { id: cellMA; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: root.saveCorner(modelData.id) }
+              }
+            }
+          }
+
+          Text {
+            width: parent.width
+            text: "Site follows the CLI: statable sites use <domain>. Monitor and margin are in the config file."
+            color: Qt.rgba(1, 1, 1, 0.45); font.family: Style.font.family; font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+          }
+          Text {
+            text: "A position change applies on the next shell reload."
+            color: Qt.rgba(1, 1, 1, 0.4); font.family: Style.font.family; font.pixelSize: Style.font.caption
           }
         }
       }
