@@ -162,16 +162,17 @@ Item {
               var txt = root.nowCount === "" ? "—" : root.nowCount
               var small = txt.length <= 1
               ctx.textAlign = "center"; ctx.textBaseline = "middle"
+              var ny = cy + root.nowSize() * 0.16  // nudge onto the true optical centre
               ctx.font = (small ? "800 " : "700 ") + root.nowSize() + "px " + root.fontFamily
               // glow pass — brighter and wider for a single digit
               ctx.shadowColor = small ? "rgba(80,150,255,0.95)" : "rgba(255,255,255,0.35)"
               ctx.shadowBlur = small ? 14 : 6
               ctx.fillStyle = "#ffffff"
-              ctx.fillText(txt, cx, cy + 2)
-              ctx.fillText(txt, cx, cy + 2)
+              ctx.fillText(txt, cx, ny)
+              ctx.fillText(txt, cx, ny)
               // crisp pass on top
               ctx.shadowBlur = 0
-              ctx.fillText(txt, cx, cy + 2)
+              ctx.fillText(txt, cx, ny)
             }
           }
           Column {
