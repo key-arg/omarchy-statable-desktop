@@ -56,6 +56,12 @@ seven-day numbers, and the dashboard it opens on click — to that site. Set
 
 ## Behaviour
 
+Only the logo is a click target — it opens the site's Statable dashboard.
+Hovering the card reveals a small gear by the logo; clicking it opens this
+settings file in your editor (creating it from a template the first time).
+The chart responds to hover with a per-hour tooltip. The rest of the card is
+inert, so it never steals a click meant for the window behind it.
+
 The card fills in only from clean `statable` runs. No key, no default site, the
 API unreachable, or the binary missing from `PATH` — each leaves that part blank
 rather than showing a wrong or stale figure. Every call runs off the UI thread,

@@ -125,6 +125,12 @@ Item {
     }
   }
   Process { id: opener; command: ["xdg-open", root.dashUrl] }
+  Process {
+    id: settingsOpener
+    property string cfgPath: Quickshell.env("HOME") + "/.local/state/omarchy/settings/statable-desktop.json"
+    command: ["sh", "-c",
+      "f='" + cfgPath + "'; mkdir -p \"$(dirname \"$f\")\"; [ -f \"$f\" ] || printf '%s\\n' '{ \"corner\": \"top-left\", \"monitor\": \"\", \"margin\": 28, \"site\": \"\" }' > \"$f\"; omarchy-launch-editor \"$f\""]
+  }
 
   function fmtInt(n) { return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, " ") }
   function nowSize() {
@@ -176,11 +182,15 @@ Item {
       border.color: Qt.rgba(1, 1, 1, 0.11)
       border.width: 1
 
+      // Hover detector only — the card body is not a click target; the logo
+      // opens the site, the gear opens the settings.
       MouseArea {
+        id: hoverMA
         anchors.fill: parent
-        cursorShape: Qt.PointingHandCursor
-        onClicked: opener.running = true
+        hoverEnabled: true
+        acceptedButtons: Qt.NoButton
       }
+      readonly property bool cardHovered: hoverMA.containsMouse || chartHover.containsMouse || gearMA.containsMouse || logoMA.containsMouse
 
       Column {
         id: content
@@ -198,15 +208,43 @@ Item {
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
             elide: Text.ElideRight
-            width: parent.width - Style.space(26)
+            width: parent.width - Style.space(48)
           }
-          Image {
+          Row {
             anchors.verticalCenter: parent.verticalCenter
             anchors.right: parent.right
-            source: Qt.resolvedUrl("logo.png")
-            sourceSize.width: Style.space(18); sourceSize.height: Style.space(18)
-            width: Style.space(18); height: Style.space(18)
-            smooth: true; fillMode: Image.PreserveAspectFit
+            spacing: Style.space(8)
+            // settings gear — appears on hover, opens the config file
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: "\uf013"
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+              color: Qt.rgba(1, 1, 1, gearMA.containsMouse ? 0.95 : 0.6)
+              opacity: card.cardHovered ? 1 : 0
+              Behavior on opacity { NumberAnimation { duration: 120 } }
+              MouseArea {
+                id: gearMA
+                anchors.fill: parent; anchors.margins: -6
+                hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                onClicked: settingsOpener.running = true
+              }
+            }
+            // logo — the one click target for the site
+            Image {
+              anchors.verticalCenter: parent.verticalCenter
+              source: Qt.resolvedUrl("logo.png")
+              sourceSize.width: Style.space(18); sourceSize.height: Style.space(18)
+              width: Style.space(18); height: Style.space(18)
+              smooth: true; fillMode: Image.PreserveAspectFit
+              opacity: logoMA.containsMouse ? 1 : 0.9
+              MouseArea {
+                id: logoMA
+                anchors.fill: parent; anchors.margins: -6
+                hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                onClicked: opener.running = true
+              }
+            }
           }
         }
 
@@ -287,16 +325,16 @@ Item {
             }
           }
           MouseArea {
+            id: chartHover
             anchors.fill: parent
             hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
+            acceptedButtons: Qt.NoButton
             onPositionChanged: function (m) {
               var n = root.hourly.length
               if (n < 2) { root.hoverIndex = -1; return }
               root.hoverIndex = Math.max(0, Math.min(n - 1, Math.round(m.x / width * (n - 1))))
             }
             onExited: root.hoverIndex = -1
-            onClicked: opener.running = true
           }
           Rectangle {
             visible: root.hoverIndex >= 0 && root.hoverIndex < root.hourly.length
