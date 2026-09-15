@@ -167,11 +167,11 @@ Item {
               ctx.shadowColor = small ? "rgba(80,150,255,0.95)" : "rgba(255,255,255,0.35)"
               ctx.shadowBlur = small ? 14 : 6
               ctx.fillStyle = "#ffffff"
-              ctx.fillText(txt, cx, cy + 1)
-              ctx.fillText(txt, cx, cy + 1)
+              ctx.fillText(txt, cx, cy + 2)
+              ctx.fillText(txt, cx, cy + 2)
               // crisp pass on top
               ctx.shadowBlur = 0
-              ctx.fillText(txt, cx, cy + 1)
+              ctx.fillText(txt, cx, cy + 2)
             }
           }
           Column {
@@ -260,8 +260,8 @@ Item {
           Rectangle {
             visible: root.hoverIndex >= 0 && root.hoverIndex < root.hourly.length
             radius: Style.space(7)
-            color: Qt.rgba(0.14, 0.14, 0.19, 0.94)
-            border.color: Qt.rgba(1, 1, 1, 0.15); border.width: 1
+            color: Qt.rgba(0.22, 0.20, 0.30, 0.82)
+            border.color: Qt.rgba(1, 1, 1, 0.18); border.width: 1
             width: tip.implicitWidth + Style.space(14)
             height: tip.implicitHeight + Style.space(10)
             x: {
