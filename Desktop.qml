@@ -27,8 +27,10 @@ Item {
   property int hoverIndex: -1
 
   // Neutral glass; blue is used only where it means Statable — the logo, the
-  // countdown ring, the endpoint — so the card sits calmly on any wallpaper.
+  // countdown ring, the glow on the live number — so the card sits calmly on
+  // any wallpaper.
   readonly property color brand: "#3f86ff"
+  readonly property string fontFamily: Style.font.family
 
   readonly property real todaySum: {
     var s = 0; for (var i = 0; i < hourly.length; i++) s += Number(hourly[i].visitors) || 0; return s
@@ -52,6 +54,7 @@ Item {
     from: 0; to: 1; duration: root.refreshMs; running: true
   }
   onRefreshProgressChanged: ring.requestPaint()
+  onNowCountChanged: ring.requestPaint()
 
   Process {
     id: nowP
@@ -74,7 +77,7 @@ Item {
   // Fit the live number to the ring: fewer digits, bigger.
   function nowSize() {
     var L = root.nowCount.length
-    if (L <= 1) return Style.space(24)
+    if (L <= 1) return Style.space(25)
     if (L === 2) return Style.space(20)
     if (L === 3) return Style.space(16)
     if (L === 4) return Style.space(13)
@@ -140,31 +143,35 @@ Item {
           }
         }
 
-        // ring countdown + auto-fit number + label
+        // ring countdown + auto-fit, glowing number
         Row {
           spacing: Style.space(11)
-          Item {
+          Canvas {
+            id: ring
             width: Style.space(46); height: Style.space(46)
-            Canvas {
-              id: ring
-              anchors.fill: parent
-              onPaint: {
-                var ctx = getContext("2d"); ctx.reset()
-                var cx = width / 2, cy = height / 2, r = width / 2 - 3
-                ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2)
-                ctx.strokeStyle = "rgba(255,255,255,0.12)"; ctx.lineWidth = 3; ctx.stroke()
-                var a0 = -Math.PI / 2
-                ctx.beginPath(); ctx.arc(cx, cy, r, a0, a0 + root.refreshProgress * Math.PI * 2)
-                ctx.strokeStyle = root.brand; ctx.lineWidth = 3; ctx.lineCap = "round"; ctx.stroke()
-              }
-            }
-            Text {
-              anchors.centerIn: parent
-              text: root.nowCount === "" ? "—" : root.nowCount
-              color: "#ffffff"
-              font.family: Style.font.family
-              font.pixelSize: root.nowSize()
-              font.bold: true
+            onPaint: {
+              var ctx = getContext("2d"); ctx.reset()
+              var cx = width / 2, cy = height / 2, r = width / 2 - 3
+              ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2)
+              ctx.strokeStyle = "rgba(255,255,255,0.12)"; ctx.lineWidth = 3; ctx.stroke()
+              var a0 = -Math.PI / 2
+              ctx.beginPath(); ctx.arc(cx, cy, r, a0, a0 + root.refreshProgress * Math.PI * 2)
+              ctx.strokeStyle = root.brand; ctx.lineWidth = 3; ctx.lineCap = "round"; ctx.stroke()
+
+              // the live number, drawn here so it can carry a glow
+              var txt = root.nowCount === "" ? "—" : root.nowCount
+              var small = txt.length <= 1
+              ctx.textAlign = "center"; ctx.textBaseline = "middle"
+              ctx.font = (small ? "800 " : "700 ") + root.nowSize() + "px " + root.fontFamily
+              // glow pass — brighter and wider for a single digit
+              ctx.shadowColor = small ? "rgba(80,150,255,0.95)" : "rgba(255,255,255,0.35)"
+              ctx.shadowBlur = small ? 14 : 6
+              ctx.fillStyle = "#ffffff"
+              ctx.fillText(txt, cx, cy + 1)
+              ctx.fillText(txt, cx, cy + 1)
+              // crisp pass on top
+              ctx.shadowBlur = 0
+              ctx.fillText(txt, cx, cy + 1)
             }
           }
           Column {
@@ -223,18 +230,14 @@ Item {
               for (var m = 1; m < n; m++) ctx.lineTo(xAt(m, n), yAt(Number(data[m].visitors) || 0, maxv))
               ctx.strokeStyle = "rgba(255,255,255,0.92)"; ctx.lineWidth = 1.6; ctx.lineJoin = "round"; ctx.stroke()
 
-              // hover guide + points
+              // hover guide + point (only while hovering; no stray dot otherwise)
               var hi = root.hoverIndex
               if (hi >= 0 && hi < n) {
                 var hx = xAt(hi, n)
                 ctx.beginPath(); ctx.moveTo(hx, 0); ctx.lineTo(hx, height)
                 ctx.strokeStyle = "rgba(255,255,255,0.25)"; ctx.lineWidth = 1; ctx.stroke()
                 var ty = yAt(Number(data[hi].visitors) || 0, maxv)
-                ctx.beginPath(); ctx.arc(hx, ty, 3, 0, Math.PI * 2); ctx.fillStyle = root.brand; ctx.fill()
-              } else {
-                // endpoint dot when not hovering
-                var ex = xAt(n - 1, n), ey = yAt(Number(data[n - 1].visitors) || 0, maxv)
-                ctx.beginPath(); ctx.arc(ex, ey, 2.4, 0, Math.PI * 2); ctx.fillStyle = root.brand; ctx.fill()
+                ctx.beginPath(); ctx.arc(hx, ty, 3, 0, Math.PI * 2); ctx.fillStyle = "#ffffff"; ctx.fill()
               }
             }
           }
@@ -253,12 +256,12 @@ Item {
             onClicked: opener.running = true
           }
 
-          // hover tooltip
+          // hover tooltip — dark glass, not pure black
           Rectangle {
             visible: root.hoverIndex >= 0 && root.hoverIndex < root.hourly.length
-            radius: Style.space(6)
-            color: Qt.rgba(0, 0, 0, 0.82)
-            border.color: Qt.rgba(1, 1, 1, 0.12); border.width: 1
+            radius: Style.space(7)
+            color: Qt.rgba(0.14, 0.14, 0.19, 0.94)
+            border.color: Qt.rgba(1, 1, 1, 0.15); border.width: 1
             width: tip.implicitWidth + Style.space(14)
             height: tip.implicitHeight + Style.space(10)
             x: {
@@ -281,14 +284,14 @@ Item {
                 color: Qt.rgba(1, 1, 1, 0.85); font.family: Style.font.family; font.pixelSize: Style.font.caption
               }
               Text {
-                text: root.hoverIndex >= 0 ? ("yest  " + root.fmtInt(root.hourly[root.hoverIndex].visitors_previous || 0)) : ""
+                text: root.hoverIndex >= 0 ? ("yesterday " + root.fmtInt(root.hourly[root.hoverIndex].visitors_previous || 0)) : ""
                 color: Qt.rgba(1, 1, 1, 0.55); font.family: Style.font.family; font.pixelSize: Style.font.caption
               }
             }
           }
         }
 
-        // footer: both real totals, each with its line marker
+        // footer: both real totals, each with a wavy marker matching its line
         Item {
           width: parent.width
           height: Style.space(14)
@@ -296,15 +299,32 @@ Item {
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
             spacing: Style.space(6)
-            Rectangle { anchors.verticalCenter: parent.verticalCenter; width: Style.space(10); height: 2; color: Qt.rgba(1,1,1,0.92) }
+            Canvas {
+              anchors.verticalCenter: parent.verticalCenter
+              width: Style.space(16); height: Style.space(9)
+              onPaint: {
+                var ctx = getContext("2d"); ctx.reset()
+                ctx.beginPath(); ctx.moveTo(0, 7); ctx.lineTo(width * 0.33, 2); ctx.lineTo(width * 0.66, 7); ctx.lineTo(width, 2)
+                ctx.strokeStyle = "rgba(255,255,255,0.92)"; ctx.lineWidth = 1.5; ctx.lineJoin = "round"; ctx.stroke()
+              }
+            }
             Text { text: "today " + root.fmtInt(root.todaySum); color: Qt.rgba(1, 1, 1, 0.72); font.family: Style.font.family; font.pixelSize: Style.font.caption }
           }
           Row {
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             spacing: Style.space(6)
-            Rectangle { anchors.verticalCenter: parent.verticalCenter; width: Style.space(10); height: 2; color: Qt.rgba(1,1,1,0.4); opacity: 0.9 }
-            Text { text: "yest " + root.fmtInt(root.yestSum); color: Qt.rgba(1, 1, 1, 0.5); font.family: Style.font.family; font.pixelSize: Style.font.caption }
+            Canvas {
+              anchors.verticalCenter: parent.verticalCenter
+              width: Style.space(16); height: Style.space(9)
+              onPaint: {
+                var ctx = getContext("2d"); ctx.reset()
+                ctx.setLineDash([2, 2])
+                ctx.beginPath(); ctx.moveTo(0, 7); ctx.lineTo(width * 0.33, 2); ctx.lineTo(width * 0.66, 7); ctx.lineTo(width, 2)
+                ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 1.5; ctx.lineJoin = "round"; ctx.stroke()
+              }
+            }
+            Text { text: "yesterday " + root.fmtInt(root.yestSum); color: Qt.rgba(1, 1, 1, 0.5); font.family: Style.font.family; font.pixelSize: Style.font.caption }
           }
         }
       }
