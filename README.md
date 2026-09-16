@@ -70,6 +70,14 @@ API unreachable, or the binary missing from `PATH` — each leaves that part bla
 rather than showing a wrong or stale figure. Every call runs off the UI thread,
 and the card refreshes once a minute.
 
+Every call is bounded: 15 seconds and 64 KiB of output, after which the
+process is killed and its output dropped. What does come back is checked
+before it becomes the model — the count must be digits, each point of the
+series a pair of finite numbers, the series at most 48 points, the site name
+cut at 96 characters — and the dashboard link is assembled from a share hash
+of the expected shape, never taken from the response as a URL. Every value
+from the API is rendered as plain text.
+
 The bar widget [`omarchy-statable`](https://github.com/key-arg/omarchy-statable)
 is a separate plugin — a live pill with a click-through panel. Run either, or both.
 

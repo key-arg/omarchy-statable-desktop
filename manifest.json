@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "com.statable.desktop",
   "name": "Statable desktop card",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "Statable",
   "license": "MIT",
   "description": "A desktop card, macOS-widget style: live visitors and a 7-day sparkline over the wallpaper.",

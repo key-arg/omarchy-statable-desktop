@@ -19,7 +19,10 @@ import qs.Ui
 // site unless `site` overrides it, so `statable sites use <domain>` moves the
 // whole card to another site. The ring is a countdown to the next refresh;
 // the chart is today by the hour against yesterday. Data is the statable CLI,
-// off the UI thread; a non-zero exit leaves that part blank.
+// off the UI thread; a non-zero exit leaves that part blank. Each call has a
+// deadline and an output cap (see Fetch), what it returns is validated and
+// capped before it becomes the model, and every value from the API is
+// rendered as plain text.
 Item {
   id: root
 
@@ -55,12 +58,14 @@ Item {
   function domainOf(u) { return String(u || "").replace(/^https?:\/\//, "").replace(/\/+$/, "") }
   function pickSite(arr) {
     if (!Array.isArray(arr) || arr.length === 0) return null
+    var n = Math.min(arr.length, 500)
+    var ok = function (x) { return x && typeof x === "object" }
     if (root.cfgSite) {
-      for (var i = 0; i < arr.length; i++)
-        if (root.domainOf(arr[i].name) === root.cfgSite || String(arr[i].site_id) === root.cfgSite) return arr[i]
+      for (var i = 0; i < n; i++)
+        if (ok(arr[i]) && (root.domainOf(arr[i].name) === root.cfgSite || String(arr[i].site_id) === root.cfgSite)) return arr[i]
     }
-    for (var j = 0; j < arr.length; j++) if (arr[j].default) return arr[j]
-    return arr[0]
+    for (var j = 0; j < n; j++) if (ok(arr[j]) && arr[j].default) return arr[j]
+    return ok(arr[0]) ? arr[0] : null
   }
 
   property string nowCount: ""
@@ -76,12 +81,19 @@ Item {
 
   readonly property int refreshMs: 60000
 
+  // Bounds on what a CLI call may hand back. The CLI prints a few hundred
+  // bytes and exits; a call that runs past the deadline or past the output
+  // cap is killed and its output dropped, so a stalled or runaway response
+  // can neither keep a process alive nor grow inside the shell. The series
+  // is a day by the hour, so 48 points is already twice what it can hold.
+  readonly property int fetchDeadlineMs: 15000
+  readonly property int fetchCapChars: 65536
+  readonly property int maxPoints: 48
+  readonly property int maxNameChars: 96
+
   function withSite(base) { return root.siteArg === "" ? base : base.concat(["--site", root.siteArg]) }
-  function fetchSite() { if (!sitesP.running) sitesP.running = true }
-  function poll() {
-    if (!nowP.running) nowP.running = true
-    if (!serP.running) serP.running = true
-  }
+  function fetchSite() { sitesF.start() }
+  function poll() { nowF.start(); serF.start() }
   Component.onCompleted: { fetchSite(); poll(); ringAnim.restart() }
 
   Timer {
@@ -94,34 +106,95 @@ Item {
   onHourlyChanged: chart.requestPaint()
   onHoverIndexChanged: chart.requestPaint()
 
-  Process {
-    id: sitesP
+  // One `statable` call, bounded: a deadline, a cap on stdout while it
+  // streams, and SIGKILL when either trips. `done` reports ok only for a
+  // clean exit within both bounds, and the text is empty otherwise. A call
+  // already running is not started again.
+  component Fetch: Item {
+    id: fetch
+    property var command: []
+    property string buf: ""
+    property bool tripped: false
+    signal done(bool ok, string text)
+    function start() { if (!proc.running) proc.running = true }
+    function trip() { fetch.tripped = true; proc.signal(9) }
+    Process {
+      id: proc
+      command: fetch.command
+      stdout: SplitParser {
+        splitMarker: ""   // every chunk as it arrives, not whole lines
+        onRead: function (data) {
+          if (fetch.tripped) return
+          fetch.buf += data
+          if (fetch.buf.length > root.fetchCapChars) fetch.trip()
+        }
+      }
+      onStarted: { fetch.buf = ""; fetch.tripped = false; deadline.restart() }
+      onExited: function (code) {
+        deadline.stop()
+        var ok = code === 0 && !fetch.tripped
+        var text = fetch.buf
+        fetch.buf = ""
+        fetch.done(ok, ok ? text : "")
+      }
+    }
+    Timer { id: deadline; interval: root.fetchDeadlineMs; onTriggered: fetch.trip() }
+  }
+
+  // ---- what comes back is checked before it is shown ----
+  function asCount(s) {                       // digits only, else "no data"
+    var t = String(s || "").trim()
+    return /^\d{1,12}$/.test(t) ? t : ""
+  }
+  function asNum(v) {                         // finite, non-negative, or null
+    var n = Number(v)
+    return (isFinite(n) && n >= 0 && n <= 1e12) ? n : null
+  }
+  function asText(v, max) {
+    return String(v === undefined || v === null ? "" : v).slice(0, max)
+  }
+
+  Fetch {
+    id: sitesF
     command: ["statable", "sites", "--format", "json"]
-    stdout: StdioCollector { id: sitesO; waitForEnd: true }
-    onExited: function (c) {
+    onDone: function (ok, text) {
       var s = null
-      try { if (c === 0) s = root.pickSite(JSON.parse(sitesO.text)) } catch (e) { s = null }
-      if (s) {
-        root.siteName = root.domainOf(s.name)
-        root.dashUrl = s.hash ? ("https://statable.com/share/" + s.hash) : "https://statable.com"
-        root.siteArg = root.cfgSite ? String(s.site_id) : ""
+      try { if (ok) s = root.pickSite(JSON.parse(text)) } catch (e) { s = null }
+      if (s && typeof s === "object") {
+        root.siteName = root.asText(root.domainOf(s.name), root.maxNameChars)
+        // The dashboard link is assembled here, never taken from the
+        // response: only a share hash of the expected shape reaches xdg-open.
+        var h = String(s.hash === undefined || s.hash === null ? "" : s.hash)
+        root.dashUrl = /^[A-Za-z0-9_-]{1,64}$/.test(h) ? ("https://statable.com/share/" + h) : "https://statable.com"
+        var id = String(s.site_id === undefined || s.site_id === null ? "" : s.site_id)
+        root.siteArg = (root.cfgSite && /^[A-Za-z0-9_.-]{1,64}$/.test(id)) ? id : ""
       }
       root.poll()
     }
   }
-  Process {
-    id: nowP
+  Fetch {
+    id: nowF
     command: root.withSite(["statable", "now"])
-    stdout: StdioCollector { id: nowO; waitForEnd: true }
-    onExited: function (c) { root.nowCount = c === 0 ? String(nowO.text || "").trim() : "" }
+    onDone: function (ok, text) { root.nowCount = ok ? root.asCount(text) : "" }
   }
-  Process {
-    id: serP
+  Fetch {
+    id: serF
     command: root.withSite(["statable", "series", "--by", "hour", "--range", "1d", "--compare", "previous_period", "--format", "json"])
-    stdout: StdioCollector { id: serO; waitForEnd: true }
-    onExited: function (c) {
-      try { var a = c === 0 ? JSON.parse(serO.text) : []; root.hourly = Array.isArray(a) ? a : [] }
-      catch (e) { root.hourly = [] }
+    onDone: function (ok, text) {
+      var a = []
+      try { if (ok) a = JSON.parse(text) } catch (e) { a = [] }
+      if (!Array.isArray(a)) a = []
+      var out = []
+      for (var i = 0; i < a.length && out.length < root.maxPoints; i++) {
+        var p = a[i]
+        if (!p || typeof p !== "object") continue
+        out.push({
+          time: root.asText(p.time, 32),
+          visitors: root.asNum(p.visitors) || 0,
+          visitors_previous: root.asNum(p.visitors_previous) || 0
+        })
+      }
+      root.hourly = out
     }
   }
   Process { id: opener; command: ["xdg-open", root.dashUrl] }
@@ -210,6 +283,7 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
             anchors.left: parent.left
             text: root.siteName || root.cfgSite || "…"
+            textFormat: Text.PlainText
             color: Qt.rgba(1, 1, 1, 0.6)
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
@@ -360,7 +434,7 @@ Item {
               id: tip
               anchors.centerIn: parent
               spacing: Style.space(1)
-              Text { text: root.hoverIndex >= 0 ? root.hourLabel(root.hourly[root.hoverIndex].time) : ""; color: "#fff"; font.family: Style.font.family; font.pixelSize: Style.font.caption; font.bold: true }
+              Text { text: root.hoverIndex >= 0 ? root.hourLabel(root.hourly[root.hoverIndex].time) : ""; textFormat: Text.PlainText; color: "#fff"; font.family: Style.font.family; font.pixelSize: Style.font.caption; font.bold: true }
               Text { text: root.hoverIndex >= 0 ? ("today " + root.fmtInt(root.hourly[root.hoverIndex].visitors || 0)) : ""; color: Qt.rgba(1, 1, 1, 0.85); font.family: Style.font.family; font.pixelSize: Style.font.caption }
               Text { text: root.hoverIndex >= 0 ? ("yesterday " + root.fmtInt(root.hourly[root.hoverIndex].visitors_previous || 0)) : ""; color: Qt.rgba(1, 1, 1, 0.55); font.family: Style.font.family; font.pixelSize: Style.font.caption }
             }
